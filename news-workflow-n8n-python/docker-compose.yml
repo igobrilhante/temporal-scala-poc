@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  # ==================== News Verification API (Python/FastAPI) ====================
+  news-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: news-verification-api
+    ports:
+      - "8000:8000"
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - LOG_LEVEL=INFO
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - news-workflow-network
+    restart: unless-stopped
+
+  # ==================== n8n Workflow Automation ====================
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n-workflow
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-admin123}
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=UTC
+      - N8N_LOG_LEVEL=info
+      # Allow all hosts to access n8n
+      - N8N_SECURE_COOKIE=false
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./n8n:/home/node/workflows:ro
+    networks:
+      - news-workflow-network
+    depends_on:
+      news-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ==================== Redis (Optional - for caching) ====================
+  redis:
+    image: redis:7-alpine
+    container_name: news-workflow-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - news-workflow-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  news-workflow-network:
+    driver: bridge
+
+volumes:
+  n8n-data:
+    driver: local
+  redis-data:
+    driver: local

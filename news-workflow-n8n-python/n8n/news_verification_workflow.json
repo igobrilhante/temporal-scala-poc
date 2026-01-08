@@ -1,0 +1,301 @@
+{
+  "name": "News Verification Workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-node",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Input configuration for the workflow\nconst config = {\n  source_url: $input.first()?.json?.source_url || 'https://feeds.bbci.co.uk/news/rss.xml',\n  max_headlines: $input.first()?.json?.max_headlines || 5,\n  request_id: `VER-${Date.now().toString(36).toUpperCase()}`\n};\n\nreturn [{ json: config }];"
+      },
+      "id": "config-node",
+      "name": "Configure Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://news-api:8000/api/v1/scraper/headlines",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ source_url: $json.source_url, max_headlines: $json.max_headlines }) }}",
+        "options": {}
+      },
+      "id": "fetch-headlines",
+      "name": "Fetch Headlines",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Extract headlines for processing\nconst response = $input.first().json;\nconst headlines = response.headlines || [];\nconst config = {\n  source_url: response.source_url,\n  source_type: response.source_type,\n  fetch_time_ms: response.fetch_time_ms\n};\n\n// Return each headline as a separate item\nreturn headlines.map((headline, index) => ({\n  json: {\n    index,\n    headline,\n    config\n  }\n}));"
+      },
+      "id": "split-headlines",
+      "name": "Split Headlines",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://news-api:8000/api/v1/scraper/content",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ article_url: $json.headline.url, headline: $json.headline.title }) }}",
+        "options": {}
+      },
+      "id": "extract-content",
+      "name": "Extract Article Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Combine headline info with extracted content\nconst headline = $('Split Headlines').item.json.headline;\nconst config = $('Split Headlines').item.json.config;\nconst content = $input.item.json;\n\nreturn {\n  json: {\n    headline,\n    config,\n    content: content.content,\n    word_count: content.word_count\n  }\n};"
+      },
+      "id": "merge-content",
+      "name": "Merge Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://news-api:8000/api/v1/agent/sources",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ headline: $json.headline.title, original_content: $json.content.substring(0, 1000), original_source: $json.headline.source_domain, max_sources: 5 }) }}",
+        "options": {}
+      },
+      "id": "find-sources",
+      "name": "Find Alternative Sources",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1440, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://news-api:8000/api/v1/agent/claims",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ headline: $json.headline.title, content: $json.content }) }}",
+        "options": {}
+      },
+      "id": "extract-claims",
+      "name": "Extract Claims",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1440, 400]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Combine all analysis results\nconst headline = $('Merge Content').item.json.headline;\nconst content = $('Merge Content').item.json.content;\nconst sources = $('Find Alternative Sources').item.json;\nconst claims = $('Extract Claims').item.json;\n\nreturn {\n  json: {\n    headline,\n    content,\n    alternative_sources: sources.sources_found || [],\n    claims: claims.claims || [],\n    search_queries: sources.search_queries_used || []\n  }\n};"
+      },
+      "id": "merge-analysis",
+      "name": "Merge Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1640, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://news-api:8000/api/v1/classifier/classify",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ headline: $json.headline.title, content: $json.content, source_domain: $json.headline.source_domain, alternative_sources: $json.alternative_sources, claims: $json.claims }) }}",
+        "options": {}
+      },
+      "id": "classify-news",
+      "name": "Classify News",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1840, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Aggregate all classification results\nconst results = $input.all().map(item => item.json);\n\n// Calculate statistics\nconst stats = {\n  total: results.length,\n  likely_real: results.filter(r => r.verdict === 'LIKELY_REAL').length,\n  likely_fake: results.filter(r => r.verdict === 'LIKELY_FAKE').length,\n  uncertain: results.filter(r => r.verdict === 'UNCERTAIN').length,\n  avg_confidence: results.length > 0 \n    ? Math.round(results.reduce((sum, r) => sum + r.confidence, 0) / results.length * 100) \n    : 0\n};\n\n// Get config from first item\nconst firstConfig = $('Split Headlines').first()?.json?.config || {};\n\nreturn [{\n  json: {\n    request_id: $('Configure Request').first().json.request_id,\n    source_url: firstConfig.source_url,\n    source_type: firstConfig.source_type,\n    headlines_analyzed: results.length,\n    statistics: stats,\n    results: results.map(r => ({\n      headline: r.headline,\n      verdict: r.verdict,\n      confidence: r.confidence,\n      supporting_sources: r.supporting_sources,\n      contradicting_sources: r.contradicting_sources,\n      summary: r.summary,\n      factors: r.factors\n    })),\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2040, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Format final report\nconst data = $input.first().json;\n\nconst separator = '='.repeat(70);\nconst subseparator = '-'.repeat(40);\n\nlet report = `\\n${separator}\\n  NEWS VERIFICATION REPORT\\n${separator}\\n\\n`;\nreport += `Request ID: ${data.request_id}\\n`;\nreport += `Source: ${data.source_url}\\n`;\nreport += `Headlines Analyzed: ${data.headlines_analyzed}\\n`;\nreport += `Timestamp: ${data.timestamp}\\n\\n`;\n\nreport += `${subseparator}\\nOVERALL STATISTICS\\n${subseparator}\\n`;\nreport += `  Likely Real:    ${data.statistics.likely_real}\\n`;\nreport += `  Likely Fake:    ${data.statistics.likely_fake}\\n`;\nreport += `  Uncertain:      ${data.statistics.uncertain}\\n`;\nreport += `  Avg Confidence: ${data.statistics.avg_confidence}%\\n\\n`;\n\nreport += `${subseparator}\\nDETAILED CLASSIFICATIONS\\n${subseparator}\\n\\n`;\n\ndata.results.forEach((r, i) => {\n  const verdictIcon = r.verdict === 'LIKELY_REAL' ? '✓' : \n                      r.verdict === 'LIKELY_FAKE' ? '✗' : '?';\n  report += `[${i + 1}] ${r.headline.substring(0, 60)}...\\n`;\n  report += `    Verdict: ${verdictIcon} ${r.verdict}\\n`;\n  report += `    Confidence: ${Math.round(r.confidence * 100)}%\\n`;\n  report += `    Supporting: ${r.supporting_sources} | Contradicting: ${r.contradicting_sources}\\n`;\n  report += `    Summary: ${r.summary}\\n\\n`;\n});\n\nreport += separator;\n\nreturn [{ json: { ...data, formatted_report: report } }];"
+      },
+      "id": "format-report",
+      "name": "Format Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2240, 300]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Configure Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configure Request": {
+      "main": [
+        [
+          {
+            "node": "Fetch Headlines",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Headlines": {
+      "main": [
+        [
+          {
+            "node": "Split Headlines",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Headlines": {
+      "main": [
+        [
+          {
+            "node": "Extract Article Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Article Content": {
+      "main": [
+        [
+          {
+            "node": "Merge Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Content": {
+      "main": [
+        [
+          {
+            "node": "Find Alternative Sources",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Extract Claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Alternative Sources": {
+      "main": [
+        [
+          {
+            "node": "Merge Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Claims": {
+      "main": [
+        [
+          {
+            "node": "Merge Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Analysis": {
+      "main": [
+        [
+          {
+            "node": "Classify News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify News": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Format Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "news-verification"
+    },
+    {
+      "name": "ai"
+    },
+    {
+      "name": "fake-news-detection"
+    }
+  ],
+  "triggerCount": 1,
+  "meta": {
+    "instanceId": "news-verification-workflow-001"
+  }
+}
