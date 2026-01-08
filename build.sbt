@@ -22,6 +22,13 @@ lazy val root = (project in file("."))
       // JSON serialization
       "dev.zio" %% "zio-json" % "0.6.2",
 
+      // HTTP Client (STTP with ZIO backend)
+      "com.softwaremill.sttp.client3" %% "zio" % sttpVersion,
+      "com.softwaremill.sttp.client3" %% "zio-json" % sttpVersion,
+
+      // HTML Parsing
+      "org.jsoup" % "jsoup" % jsoupVersion,
+
       // Logging
       "ch.qos.logback" % "logback-classic" % "1.4.14",
 

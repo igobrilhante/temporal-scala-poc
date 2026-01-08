@@ -8,9 +8,11 @@ This POC showcases:
 
 - **ZIO Integration Layer**: Custom ZIO wrappers for Temporal Java SDK
 - **Order Processing Workflow**: A complete saga pattern implementation
+- **News Verification Workflow**: AI-powered fake news detection system
 - **Activities with ZIO Effects**: Running ZIO effects within Temporal activities
 - **Signals & Queries**: Interacting with running workflows
 - **Compensation Logic**: Rollback support for failed operations
+- **AI Integration**: OpenAI-powered news analysis and classification
 
 ## Architecture
 
@@ -171,6 +173,178 @@ trait OrderWorkflow {
    │
    ▼
    COMPLETED
+```
+
+---
+
+## News Verification Workflow
+
+A sophisticated AI-powered workflow for detecting fake news by cross-referencing multiple sources.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    NewsVerificationWorkflow                          │
+└─────────────────────────────────────────────────────────────────────┘
+                               │
+           ┌───────────────────┼───────────────────┐
+           ▼                   ▼                   ▼
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│ NewsScraperAct. │  │  AIAgentAct.    │  │ NewsClassifier  │
+│                 │  │                 │  │    Act.         │
+│ - Fetch RSS     │  │ - Find sources  │  │ - Analyze       │
+│ - Scrape HTML   │  │ - Extract claims│  │ - Classify      │
+│ - Search news   │  │ - Compare texts │  │ - Score         │
+└─────────────────┘  └─────────────────┘  └─────────────────┘
+           │                   │                   │
+           └───────────────────┼───────────────────┘
+                               ▼
+                    ┌─────────────────┐
+                    │   OpenAI API    │
+                    │   (optional)    │
+                    └─────────────────┘
+```
+
+### Quick Start - News Verification
+
+#### 1. Set OpenAI API Key (Optional but Recommended)
+
+```bash
+export OPENAI_API_KEY="your-api-key-here"
+```
+
+Without the API key, the system uses heuristic analysis only.
+
+#### 2. Start the News Verification Worker
+
+```bash
+sbt "runMain com.example.temporal.news.worker.NewsVerificationWorkerApp"
+```
+
+#### 3. Run News Verification
+
+```bash
+# Verify headlines from BBC News RSS feed
+sbt "runMain com.example.temporal.news.NewsVerificationClientApp"
+
+# Verify from a specific source with custom headline count
+sbt "runMain com.example.temporal.news.NewsVerificationClientApp https://feeds.bbci.co.uk/news/rss.xml 5"
+
+# Async mode with progress monitoring
+sbt "runMain com.example.temporal.news.NewsVerificationAsyncClientApp"
+```
+
+### News Verification Flow
+
+```
+1. FETCH HEADLINES
+   │
+   └──► Scrape RSS/HTML from news source
+        Extract: title, URL, summary, date
+   │
+2. FOR EACH HEADLINE:
+   │
+   ├──► Extract Article Content
+   │    Parse full article text
+   │
+   ├──► AI Agent: Find Alternative Sources
+   │    • Generate search queries
+   │    • Search for related articles
+   │    • Compare and analyze sources
+   │
+   ├──► AI Agent: Extract Key Claims
+   │    Identify factual statements
+   │
+   └──► Classify News
+        • Source credibility check
+        • Linguistic pattern analysis
+        • Cross-reference scoring
+        • AI classification
+   │
+3. AGGREGATE RESULTS
+   │
+   └──► Generate statistics and report
+```
+
+### Classification Factors
+
+The system analyzes multiple factors:
+
+| Factor | Weight | Description |
+|--------|--------|-------------|
+| Source Credibility | 25% | Known reliable vs unreliable sources |
+| Linguistic Analysis | 20% | Sensationalism, clickbait, emotional language |
+| Cross-Reference | 30% | Corroboration from other sources |
+| AI Analysis | 25% | GPT-4 based content analysis |
+
+### Verdicts
+
+- **LIKELY_REAL**: Multiple credible sources confirm, high confidence
+- **LIKELY_FAKE**: Major contradictions or known false patterns
+- **UNCERTAIN**: Mixed signals, needs more investigation
+
+### Supported News Sources
+
+- RSS feeds (e.g., `https://feeds.bbci.co.uk/news/rss.xml`)
+- News website URLs (HTML scraping)
+- Custom search queries
+
+### Example Output
+
+```
+======================================================================
+  VERIFICATION RESULTS
+======================================================================
+
+Request ID: VER-A1B2C3D4
+Source: https://feeds.bbci.co.uk/news/rss.xml
+Headlines Analyzed: 5
+Processing Time: 45230ms
+
+----------------------------------------
+OVERALL STATISTICS
+----------------------------------------
+  Likely Real:    4
+  Likely Fake:    0
+  Uncertain:      1
+  Avg Confidence: 78%
+
+----------------------------------------
+DETAILED CLASSIFICATIONS
+----------------------------------------
+
+[1] Breaking: Major Policy Announcement by Government...
+    Source: bbc.co.uk
+    Verdict: ✓ LIKELY_REAL
+    Confidence: 85%
+    Factors Analyzed:
+      - Source credibility: mainstream (90%)
+      - Linguistic analysis: 92% credible
+      - Cross-reference: 3 supporting, 0 contradicting
+      - AI analysis: LIKELY_REAL (88% confident)
+```
+
+### Project Structure (News Verification)
+
+```
+src/main/scala/com/example/temporal/news/
+├── model/
+│   └── Models.scala              # Domain models
+├── activity/
+│   ├── NewsScraperActivities.scala
+│   ├── NewsScraperActivitiesImpl.scala
+│   ├── AIAgentActivities.scala
+│   ├── AIAgentActivitiesImpl.scala
+│   ├── NewsClassifierActivities.scala
+│   └── NewsClassifierActivitiesImpl.scala
+├── workflow/
+│   ├── NewsVerificationWorkflow.scala
+│   └── NewsVerificationWorkflowImpl.scala
+├── worker/
+│   └── NewsVerificationWorkerApp.scala
+├── NewsVerificationClientApp.scala
+└── NewsVerificationAsyncClientApp.scala
 ```
 
 ## Configuration
