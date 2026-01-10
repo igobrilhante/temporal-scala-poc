@@ -1,0 +1,226 @@
+{
+  "name": "News Verification - Webhook Trigger",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "verify-news",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "news-verification-webhook"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Validate and configure request from webhook\nconst body = $input.first()?.json?.body || {};\n\nconst config = {\n  source_url: body.source_url || 'https://feeds.bbci.co.uk/news/rss.xml',\n  max_headlines: Math.min(body.max_headlines || 5, 20),\n  request_id: `VER-${Date.now().toString(36).toUpperCase()}`\n};\n\n// Validate URL\nif (!config.source_url.startsWith('http')) {\n  throw new Error('Invalid source_url: must be a valid HTTP/HTTPS URL');\n}\n\nreturn [{ json: config }];"
+      },
+      "id": "validate-request",
+      "name": "Validate Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://news-api:8000/api/v1/scraper/headlines",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ source_url: $json.source_url, max_headlines: $json.max_headlines }) }}",
+        "options": {}
+      },
+      "id": "fetch-headlines-wh",
+      "name": "Fetch Headlines",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const response = $input.first().json;\nconst headlines = response.headlines || [];\nconst config = {\n  source_url: response.source_url,\n  source_type: response.source_type,\n  fetch_time_ms: response.fetch_time_ms\n};\n\nreturn headlines.map((headline, index) => ({\n  json: { index, headline, config }\n}));"
+      },
+      "id": "split-headlines-wh",
+      "name": "Split Headlines",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://news-api:8000/api/v1/scraper/content",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ article_url: $json.headline.url, headline: $json.headline.title }) }}",
+        "options": {}
+      },
+      "id": "extract-content-wh",
+      "name": "Extract Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const headline = $('Split Headlines').item.json.headline;\nconst config = $('Split Headlines').item.json.config;\nconst content = $input.item.json;\n\nreturn {\n  json: {\n    headline,\n    config,\n    content: content.content,\n    word_count: content.word_count\n  }\n};"
+      },
+      "id": "merge-content-wh",
+      "name": "Merge Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://news-api:8000/api/v1/classifier/classify",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ headline: $json.headline.title, content: $json.content, source_domain: $json.headline.source_domain, alternative_sources: [], claims: [] }) }}",
+        "options": {}
+      },
+      "id": "classify-quick-wh",
+      "name": "Quick Classify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1440, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const results = $input.all().map(item => item.json);\nconst firstConfig = $('Split Headlines').first()?.json?.config || {};\n\nconst stats = {\n  total: results.length,\n  likely_real: results.filter(r => r.verdict === 'LIKELY_REAL').length,\n  likely_fake: results.filter(r => r.verdict === 'LIKELY_FAKE').length,\n  uncertain: results.filter(r => r.verdict === 'UNCERTAIN').length,\n  avg_confidence: results.length > 0 \n    ? Math.round(results.reduce((sum, r) => sum + r.confidence, 0) / results.length * 100) \n    : 0\n};\n\nreturn [{\n  json: {\n    success: true,\n    request_id: $('Validate Request').first().json.request_id,\n    source_url: firstConfig.source_url,\n    headlines_analyzed: results.length,\n    statistics: stats,\n    results: results.map(r => ({\n      headline: r.headline,\n      verdict: r.verdict,\n      confidence: Math.round(r.confidence * 100) + '%',\n      summary: r.summary\n    })),\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "aggregate-wh",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1640, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1840, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Request": {
+      "main": [
+        [
+          {
+            "node": "Fetch Headlines",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Headlines": {
+      "main": [
+        [
+          {
+            "node": "Split Headlines",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Headlines": {
+      "main": [
+        [
+          {
+            "node": "Extract Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Content": {
+      "main": [
+        [
+          {
+            "node": "Merge Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Content": {
+      "main": [
+        [
+          {
+            "node": "Quick Classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quick Classify": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "news-verification"
+    },
+    {
+      "name": "webhook"
+    }
+  ],
+  "triggerCount": 1,
+  "meta": {
+    "instanceId": "news-verification-webhook-001"
+  }
+}
